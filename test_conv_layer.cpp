@@ -68,10 +68,15 @@ void runConvolutionTest() {
     dim3 gridDim((outputWidth + blockDim.x - 1) / blockDim.x, 
                  (outputHeight + blockDim.y - 1) / blockDim.y);
 
-    void* kernelArgs[] = {&d_input, &d_kernel, &d_output, 
-                          &inputWidth, &inputHeight, 
-                          &kernelWidth, &kernelHeight, 
-                          &outputWidth, &outputHeight};
+    void* kernelArgs[] = {reinterpret_cast<void*>(&d_input), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_output), 
+                      reinterpret_cast<void*>(&inputWidth), 
+                      reinterpret_cast<void*>(&inputHeight), 
+                      reinterpret_cast<void*>(&kernelWidth), 
+                      reinterpret_cast<void*>(&kernelHeight), 
+                      reinterpret_cast<void*>(&outputWidth), 
+                      reinterpret_cast<void*>(&outputHeight)};
 
     kernelParams.func = (void*)conv2d;
     kernelParams.gridDim = gridDim;
@@ -103,13 +108,13 @@ void runConvolutionTest() {
     CHECK_HIP_ERROR(hipMemcpy(h_output.data(), d_output, outputSize, hipMemcpyDeviceToHost));
 
     // Free resources
-    hipGraphExecDestroy(graphExec);
-    hipGraphDestroy(graph);
-    hipStreamDestroy(stream);
+    CHECK_HIP_ERROR(hipGraphExecDestroy(graphExec));
+    CHECK_HIP_ERROR(hipGraphDestroy(graph));
+    CHECK_HIP_ERROR(hipStreamDestroy(stream));
+    CHECK_HIP_ERROR(hipFree(d_input));
+    CHECK_HIP_ERROR(hipFree(d_kernel));
+    CHECK_HIP_ERROR(hipFree(d_output));
 
-    hipFree(d_input);
-    hipFree(d_kernel);
-    hipFree(d_output);
 
     std::cout << "Test completed successfully." << std::endl;
 }
