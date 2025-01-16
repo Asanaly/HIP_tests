@@ -31,13 +31,13 @@ int main() {
 
     // Device memory pointers
     float *A_d, *B_d, *C_d;
-    hipMalloc(&A_d, M * K * N * sizeof(float));
-    hipMalloc(&B_d, K * P * N * sizeof(float));
-    hipMalloc(&C_d, M * P * N * sizeof(float));
+    (void)hipMalloc(&A_d, M * K * N * sizeof(float));
+    (void)hipMalloc(&B_d, K * P * N * sizeof(float));
+    (void)hipMalloc(&C_d, M * P * N * sizeof(float));
 
     // HIP streams and graphs
     hipStream_t stream;
-    hipStreamCreate(&stream);
+    (void)hipStreamCreate(&stream);
 
     hipGraph_t graph;
     hipGraphExec_t graphExec;
@@ -46,11 +46,11 @@ int main() {
     auto buildStart = std::chrono::high_resolution_clock::now();
 
     // Begin graph capture
-    hipStreamBeginCapture(stream, hipStreamCaptureModeGlobal);
+    (void)hipStreamBeginCapture(stream, hipStreamCaptureModeGlobal);
 
     // Transfer data to device
-    hipMemcpyAsync(A_d, A.data(), M * K * N * sizeof(float), hipMemcpyHostToDevice, stream);
-    hipMemcpyAsync(B_d, B.data(), K * P * N * sizeof(float), hipMemcpyHostToDevice, stream);
+    (void)hipMemcpyAsync(A_d, A.data(), M * K * N * sizeof(float), hipMemcpyHostToDevice, stream);
+    (void)hipMemcpyAsync(B_d, B.data(), K * P * N * sizeof(float), hipMemcpyHostToDevice, stream);
 
     // Set up kernel dimensions
     dim3 blockSize(16, 16, 1);
@@ -62,21 +62,21 @@ int main() {
     hipLaunchKernelGGL(batchedMatMulKernel, gridSize, blockSize, 0, stream, A_d, B_d, C_d, M, K, P, N);
 
     // Transfer result back to host
-    hipMemcpyAsync(C.data(), C_d, M * P * N * sizeof(float), hipMemcpyDeviceToHost, stream);
+    (void)hipMemcpyAsync(C.data(), C_d, M * P * N * sizeof(float), hipMemcpyDeviceToHost, stream);
 
     // End graph capture
-    hipStreamEndCapture(stream, &graph);
+    (void)hipStreamEndCapture(stream, &graph);
 
     // Instantiate the graph
-    hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
+    (void)hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
 
     // Record graph build end time
     auto buildEnd = std::chrono::high_resolution_clock::now();
 
     // Launch the graph and measure execution time
     auto execStart = std::chrono::high_resolution_clock::now();
-    hipGraphLaunch(graphExec, stream);
-    hipStreamSynchronize(stream);
+    (void)hipGraphLaunch(graphExec, stream);
+    (void)hipStreamSynchronize(stream);
     auto execEnd = std::chrono::high_resolution_clock::now();
 
     // Calculate times
@@ -97,12 +97,12 @@ int main() {
               << " GB\n";
 
     // Clean up
-    hipGraphExecDestroy(graphExec);
-    hipGraphDestroy(graph);
-    hipStreamDestroy(stream);
-    hipFree(A_d);
-    hipFree(B_d);
-    hipFree(C_d);
+    (void)hipGraphExecDestroy(graphExec);
+    (void)hipGraphDestroy(graph);
+    (void)hipStreamDestroy(stream);
+    (void)hipFree(A_d);
+    (void)hipFree(B_d);
+    (void)hipFree(C_d);
 
     return 0;
 }
