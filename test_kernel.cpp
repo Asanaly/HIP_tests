@@ -40,7 +40,7 @@ int main() {
     CHECK_HIP_ERROR(hipGraphCreate(&graph, 0));
 
     // Define kernel parameters
-    void* kernelArgs[] = {&d_A, &d_B, &d_C, &N};
+    void* kernelArgs[] = {&d_A, &d_B, &d_C, (void*)&N};
     dim3 blockDim(256);
     dim3 gridDim((N + blockDim.x - 1) / blockDim.x);
 
@@ -55,6 +55,7 @@ int main() {
 
     hipGraphNode_t kernelNode;
     CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode, graph, nullptr, 0, &kernelNodeParams));
+
 
     // Instantiate graph
     CHECK_HIP_ERROR(hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
