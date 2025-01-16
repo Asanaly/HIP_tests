@@ -51,7 +51,6 @@ __global__ void matMul(const float* A, const float* B, float* C, int M, int N, i
     }
 }
 
-// Function to validate GPU results against CPU results
 bool validate(const std::vector<float>& A, const std::vector<float>& B, const std::vector<float>& C, int M, int N, int K) {
     std::vector<float> C_cpu(M * N, 0.0f);
 
@@ -73,7 +72,9 @@ bool validate(const std::vector<float>& A, const std::vector<float>& B, const st
 }
 
 int main() {
-    // Output GPU info
+    std::cout << "Running Matrix Multiplication with HIP Graphs..." << std::endl;
+
+    // Device properties
     int device;
     hipDeviceProp_t deviceProp;
     CHECK_HIP_ERROR(hipGetDevice(&device));
@@ -84,14 +85,14 @@ int main() {
     size_t sizeB = K * N;
     size_t sizeC = M * N;
 
-    // Allocate host memory
-    std::vector<float> h_A(sizeA, 1.0f);  // Initialize A with 1.0
-    std::vector<float> h_B(sizeB, 2.0f);  // Initialize B with 2.0
+    // Host memory
+    std::vector<float> h_A(sizeA, 1.0f);  // Initialize A
+    std::vector<float> h_B(sizeB, 2.0f);  // Initialize B
     std::vector<float> h_C(sizeC, 0.0f);  // Output C
 
     float *d_A, *d_B, *d_C;
 
-    // Allocate device memory
+    // Device memory allocation
     CHECK_HIP_ERROR(hipMalloc(&d_A, sizeA * sizeof(float)));
     CHECK_HIP_ERROR(hipMalloc(&d_B, sizeB * sizeof(float)));
     CHECK_HIP_ERROR(hipMalloc(&d_C, sizeC * sizeof(float)));
@@ -104,16 +105,23 @@ int main() {
     hipGraph_t graph;
     hipGraphExec_t graphExec;
     hipStream_t stream;
-
     CHECK_HIP_ERROR(hipStreamCreate(&stream));
     CHECK_HIP_ERROR(hipGraphCreate(&graph, 0));
 
-    // Define kernel parameters
+    // Kernel parameters
     dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
     dim3 gridDim((N + BLOCK_SIZE - 1) / BLOCK_SIZE, (M + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-    void* kernelArgs[] = {&d_A, &d_B, &d_C, &M, &N, &K};
-    hipKernelNodeParams kernelNodeParams = {0};
+    void* kernelArgs[] = {
+        (void*)&d_A,
+        (void*)&d_B,
+        (void*)&d_C,
+        (void*)&M,
+        (void*)&N,
+        (void*)&K
+    };
+
+    hipKernelNodeParams kernelNodeParams = {};
     kernelNodeParams.func = reinterpret_cast<void*>(matMul);
     kernelNodeParams.gridDim = gridDim;
     kernelNodeParams.blockDim = blockDim;
@@ -124,40 +132,32 @@ int main() {
     hipGraphNode_t kernelNode;
     CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode, graph, nullptr, 0, &kernelNodeParams));
 
-    // Instantiate graph
+    // Instantiate and execute graph
     CHECK_HIP_ERROR(hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
-
-    // Measure execution time
     auto start = std::chrono::high_resolution_clock::now();
     CHECK_HIP_ERROR(hipGraphLaunch(graphExec, stream));
     CHECK_HIP_ERROR(hipStreamSynchronize(stream));
     auto end = std::chrono::high_resolution_clock::now();
-
     std::chrono::duration<float, std::milli> duration = end - start;
-    std::cout << "MatMul completed in " << duration.count() << " ms" << std::endl;
+    std::cout << "Matrix multiplication completed in " << duration.count() << " ms" << std::endl;
 
     // Copy results back to host
     CHECK_HIP_ERROR(hipMemcpy(h_C.data(), d_C, sizeC * sizeof(float), hipMemcpyDeviceToHost));
 
     // Validate results
     if (validate(h_A, h_B, h_C, M, N, K)) {
-        std::cout << "Validation Passed!" << std::endl;
+        std::cout << "Validation passed!" << std::endl;
     } else {
-        std::cout << "Validation Failed!" << std::endl;
+        std::cout << "Validation failed!" << std::endl;
     }
 
-    // Memory usage
-    size_t freeMem, totalMem;
-    CHECK_HIP_ERROR(hipMemGetInfo(&freeMem, &totalMem));
-    std::cout << "Memory: Free = " << freeMem / (1024.0 * 1024) << " MB, Total = " << totalMem / (1024.0 * 1024) << " MB" << std::endl;
-
     // Clean up
-    CHECK_HIP_ERROR(hipGraphExecDestroy(graphExec));
-    CHECK_HIP_ERROR(hipGraphDestroy(graph));
-    CHECK_HIP_ERROR(hipStreamDestroy(stream));
     CHECK_HIP_ERROR(hipFree(d_A));
     CHECK_HIP_ERROR(hipFree(d_B));
     CHECK_HIP_ERROR(hipFree(d_C));
+    CHECK_HIP_ERROR(hipStreamDestroy(stream));
+    CHECK_HIP_ERROR(hipGraphExecDestroy(graphExec));
+    CHECK_HIP_ERROR(hipGraphDestroy(graph));
 
     return 0;
 }
