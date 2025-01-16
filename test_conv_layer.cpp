@@ -71,12 +71,12 @@ void runConvolutionTest() {
     void* kernelArgs[] = {reinterpret_cast<void*>(&d_input), 
                       reinterpret_cast<void*>(&d_kernel), 
                       reinterpret_cast<void*>(&d_output), 
-                      reinterpret_cast<void*>(&inputWidth), 
-                      reinterpret_cast<void*>(&inputHeight), 
-                      reinterpret_cast<void*>(&kernelWidth), 
-                      reinterpret_cast<void*>(&kernelHeight), 
-                      reinterpret_cast<void*>(&outputWidth), 
-                      reinterpret_cast<void*>(&outputHeight)};
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
 
     kernelParams.func = (void*)conv2d;
     kernelParams.gridDim = gridDim;
