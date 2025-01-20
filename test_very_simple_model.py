@@ -2,74 +2,54 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import time
+N, D_in, H, D_out = 640, 4096, 2048, 1024
+model = torch.nn.Sequential(torch.nn.Linear(D_in, H),
+                            torch.nn.Dropout(p=0.2),
+                            torch.nn.Linear(H, D_out),
+                            torch.nn.Dropout(p=0.1)).cuda()
+loss_fn = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
 
-# Define a very simple model with one linear layer
-class SimpleModel(nn.Module):
-    def __init__(self):
-        super(SimpleModel, self).__init__()
-        self.linear = nn.Linear(3, 2)  # Input of size 3, output of size 2
+# Placeholders used for capture
+static_input = torch.randn(N, D_in, device='cuda')
+static_target = torch.randn(N, D_out, device='cuda')
 
-    def forward(self, x):
-        return self.linear(x)
-
-def simple_cuda_graph_test():
-    # Ensure you're using GPU (CUDA)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if device.type != "cuda":
-        raise RuntimeError("CUDA device not available. This test requires a GPU.")
-
-    # Initialize model, inputs, labels, loss, and optimizer
-    model = SimpleModel().to(device)
-    inputs = torch.randn(1, 3, device=device)  # Random input tensor of size (1, 3)
-    labels = torch.randn(1, 2, device=device)  # Random labels for comparison (output size is 2)
-
-    criterion = nn.MSELoss()  # Mean Squared Error loss for simplicity
-    optimizer = optim.SGD(model.parameters(), lr=0.01)
-
-    # Warm-up the model
-    optimizer.zero_grad(set_to_none=True)
-    outputs = model(inputs)
-    loss = criterion(outputs, labels)
-    loss.backward()
-    optimizer.step()
-
-    # Capture the graph
-    print("Capturing CUDA Graph...")
-    graph_capture_start = time.time()
-    
-    graph = torch.cuda.CUDAGraph()
-
-    # Ensure optimizer state is static
-    optimizer.zero_grad(set_to_none=True)
-
-    # Capture the graph
-    with torch.cuda.graph(graph):
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
+# warmup
+# Uses static_input and static_target here for convenience,
+# but in a real setting, because the warmup includes optimizer.step()
+# you must use a few batches of real data.
+s = torch.cuda.Stream()
+s.wait_stream(torch.cuda.current_stream())
+with torch.cuda.stream(s):
+    for i in range(3):
+        optimizer.zero_grad(set_to_none=True)
+        y_pred = model(static_input)
+        loss = loss_fn(y_pred, static_target)
         loss.backward()
         optimizer.step()
+torch.cuda.current_stream().wait_stream(s)
 
-    graph_capture_end = time.time()
-    graph_capture_time = graph_capture_end - graph_capture_start
-    print(f"Graph capture time: {graph_capture_time:.4f} seconds")
+# capture
+g = torch.cuda.CUDAGraph()
+# Sets grads to None before capture, so backward() will create
+# .grad attributes with allocations from the graph's private pool
+optimizer.zero_grad(set_to_none=True)
+with torch.cuda.graph(g):
+    static_y_pred = model(static_input)
+    static_loss = loss_fn(static_y_pred, static_target)
+    static_loss.backward()
+    optimizer.step()
 
-    # Execute the graph multiple times for profiling
-    print("Executing CUDA Graph...")
-    exec_start = time.time()
+real_inputs = [torch.rand_like(static_input) for _ in range(10)]
+real_targets = [torch.rand_like(static_target) for _ in range(10)]
 
-    num_replays = 5  # Number of graph replays
-    for _ in range(num_replays):
-        graph.replay()
-
-    exec_end = time.time()
-    exec_time_total = exec_end - exec_start
-    exec_time_avg = exec_time_total / num_replays
-
-    print("\n--- Metrics ---")
-    print(f"Final Loss: {loss.item():.4f}")
-    print(f"Total Execution Time: {exec_time_total:.4f} seconds")
-    print(f"Average Execution Time: {exec_time_avg:.4f} seconds")
-
-# Run the test
-if __name__ == "__main__":
-    simple_cuda_graph_test()
+for data, target in zip(real_inputs, real_targets):
+    # Fills the graph's input memory with new data to compute on
+    static_input.copy_(data)
+    static_target.copy_(target)
+    # replay() includes forward, backward, and step.
+    # You don't even need to call optimizer.zero_grad() between iterations
+    # because the captured backward refills static .grad tensors in place.
+    g.replay()
+    # Params have been updated. static_y_pred, static_loss, and .grad
+    # attributes hold values from computing on this iteration's data.
