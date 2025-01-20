@@ -17,3 +17,6 @@ test_conv_layer.cpp:78:23: error: reinterpret_cast from 'const int *' to 'void *
 test_conv_layer.cpp:79:23: error: reinterpret_cast from 'const int *' to 'void *' casts away qualifiers
    79 |                       reinterpret_cast<void*>(&outputHeight)};
       |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+sudo docker run -it --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --privileged -u $(id -u):$(id -g) rocm/rocm-terminal:latest
