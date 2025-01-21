@@ -1,0 +1,28 @@
+import tensorflow as tf
+import numpy as np
+
+# Verify TensorFlow is using the ROCm backend
+print("TensorFlow is using GPU:", tf.test.is_gpu_available())
+
+# Define input data and kernel for convolution
+input_data = np.random.rand(1, 10, 10, 1).astype(np.float32)  # Shape: (batch, height, width, channels)
+kernel = np.random.rand(3, 3, 1, 1).astype(np.float32)       # Shape: (filter_height, filter_width, in_channels, out_channels)
+
+# Create TensorFlow constants for input and kernel
+input_tensor = tf.constant(input_data)
+kernel_tensor = tf.constant(kernel)
+
+# Perform convolution operation
+conv_result = tf.nn.conv2d(input_tensor, kernel_tensor, strides=[1, 1, 1, 1], padding="SAME")
+
+print("Convolution result shape:", conv_result.shape)
+
+# Run a simple HIP graph test
+@tf.function
+def hip_graph_test(x):
+    return tf.math.square(x) + tf.math.sqrt(x)
+
+graph_input = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
+graph_output = hip_graph_test(graph_input)
+
+print("HIP graph output:", graph_output.numpy())
