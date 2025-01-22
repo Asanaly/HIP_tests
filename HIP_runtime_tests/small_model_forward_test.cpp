@@ -9,14 +9,6 @@
         exit(EXIT_FAILURE); \
     }
 
-// Function to print memory usage
-void printMemoryUsage(const std::string& label) {
-    size_t freeMem, totalMem;
-    CHECK_HIP_ERROR(hipMemGetInfo(&freeMem, &totalMem));
-    std::cout << label << " - Free memory: " << freeMem / (1024.0 * 1024.0) << " MB, Total memory: " 
-              << totalMem / (1024.0 * 1024.0) << " MB" << std::endl;
-}
-
 __global__ void conv2d(const float* input, const float* kernel, float* output, 
                        int inputWidth, int inputHeight, 
                        int kernelWidth, int kernelHeight, 
@@ -54,9 +46,6 @@ void runConvolutionTest() {
     float *d_input, *d_kernel, *d_output;
     float *d_intermediate1, *d_intermediate2, *d_intermediate3, *d_intermediate4;
 
-    // Report initial memory usage
-    printMemoryUsage("Before memory allocation");
-
     // Allocate memory
     CHECK_HIP_ERROR(hipMalloc(&d_input, inputSize));
     CHECK_HIP_ERROR(hipMalloc(&d_kernel, kernelSize));
@@ -65,9 +54,6 @@ void runConvolutionTest() {
     CHECK_HIP_ERROR(hipMalloc(&d_intermediate3, outputSize));
     CHECK_HIP_ERROR(hipMalloc(&d_intermediate4, outputSize));
     CHECK_HIP_ERROR(hipMalloc(&d_output, outputSize));
-
-    // Report memory usage after allocation
-    printMemoryUsage("After memory allocation");
 
     // Copy data to device
     CHECK_HIP_ERROR(hipMemcpy(d_input, h_input.data(), inputSize, hipMemcpyHostToDevice));
@@ -86,33 +72,113 @@ void runConvolutionTest() {
     dim3 gridDim((outputWidth + blockDim.x - 1) / blockDim.x, 
                  (outputHeight + blockDim.y - 1) / blockDim.y);
 
-    void* kernelArgs[] = {reinterpret_cast<void*>(&d_input), 
-                          reinterpret_cast<void*>(&d_kernel), 
-                          reinterpret_cast<void*>(&d_output), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+    void* kernelArgs1[] = {reinterpret_cast<void*>(&d_input), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_intermediate1), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
 
     kernelParams[0].func = (void*)conv2d;
     kernelParams[0].gridDim = gridDim;
     kernelParams[0].blockDim = blockDim;
     kernelParams[0].sharedMemBytes = 0;
-    kernelParams[0].kernelParams = kernelArgs;
+    kernelParams[0].kernelParams = kernelArgs1;
     kernelParams[0].extra = nullptr;
 
     CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[0], graph, nullptr, 0, &kernelParams[0]));
 
-    hipGraphExec_t graphExec;
-    CHECK_HIP_ERROR(hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+    void* kernelArgs2[] = {reinterpret_cast<void*>(&d_intermediate1), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_intermediate2), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
 
-    // Report memory usage before execution
-    printMemoryUsage("Before graph execution");
+    kernelParams[1].func = (void*)conv2d;
+    kernelParams[1].gridDim = gridDim;
+    kernelParams[1].blockDim = blockDim;
+    kernelParams[1].sharedMemBytes = 0;
+    kernelParams[1].kernelParams = kernelArgs2;
+    kernelParams[1].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[1], graph, nullptr, 0, &kernelParams[1]));
+
+    void* kernelArgs3[] = {reinterpret_cast<void*>(&d_intermediate2), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_intermediate3), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+
+    kernelParams[2].func = (void*)conv2d;
+    kernelParams[2].gridDim = gridDim;
+    kernelParams[2].blockDim = blockDim;
+    kernelParams[2].sharedMemBytes = 0;
+    kernelParams[2].kernelParams = kernelArgs3;
+    kernelParams[2].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[2], graph, nullptr, 0, &kernelParams[2]));
+
+    void* kernelArgs4[] = {reinterpret_cast<void*>(&d_intermediate3), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_intermediate4), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+
+    kernelParams[3].func = (void*)conv2d;
+    kernelParams[3].gridDim = gridDim;
+    kernelParams[3].blockDim = blockDim;
+    kernelParams[3].sharedMemBytes = 0;
+    kernelParams[3].kernelParams = kernelArgs4;
+    kernelParams[3].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[3], graph, nullptr, 0, &kernelParams[3]));
+
+    void* kernelArgs5[] = {reinterpret_cast<void*>(&d_intermediate4), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_output), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+
+    kernelParams[4].func = (void*)conv2d;
+    kernelParams[4].gridDim = gridDim;
+    kernelParams[4].blockDim = blockDim;
+    kernelParams[4].sharedMemBytes = 0;
+    kernelParams[4].kernelParams = kernelArgs5;
+    kernelParams[4].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[4], graph, nullptr, 0, &kernelParams[4]));
+
+    hipGraphExec_t graphExec;
+    auto graph_start = std::chrono::high_resolution_clock::now();
+    CHECK_HIP_ERROR(hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+    auto graph_end = std::chrono::high_resolution_clock::now();
+    std::cout << "Time to build graph: " 
+          << std::chrono::duration_cast<std::chrono::microseconds>(graph_end - graph_start).count() 
+          << " microseconds" << std::endl;
 
     float total_time = 0.0f;
-    for (int i = 0; i < 100; i++) {
+    auto total_start = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < 1000; i++) {
         auto start = std::chrono::high_resolution_clock::now();
         CHECK_HIP_ERROR(hipGraphLaunch(graphExec, stream));
         CHECK_HIP_ERROR(hipStreamSynchronize(stream));
@@ -120,11 +186,12 @@ void runConvolutionTest() {
         total_time += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     }
 
-    float average_time = total_time / 100.0f;
-    std::cout << "Average execution time: " << average_time << " microseconds" << std::endl;
+    auto total_end = std::chrono::high_resolution_clock::now();
+    float average_time = total_time / 1000.0f;
+    float overall_total_time = std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count();
 
-    // Report memory usage after execution
-    printMemoryUsage("After graph execution");
+    std::cout << "Average execution time: " << average_time << " microseconds" << std::endl;
+    std::cout << "Total execution time for 1000 runs: " << overall_total_time << " microseconds" << std::endl;
 
     // Copy results back to host
     CHECK_HIP_ERROR(hipMemcpy(h_output.data(), d_output, outputSize, hipMemcpyDeviceToHost));
@@ -141,13 +208,11 @@ void runConvolutionTest() {
     CHECK_HIP_ERROR(hipFree(d_intermediate4));
     CHECK_HIP_ERROR(hipFree(d_output));
 
-    // Report final memory usage
-    printMemoryUsage("After memory deallocation");
-
     std::cout << "Test completed successfully." << std::endl;
 }
 
-int main() {
+int main(){
     runConvolutionTest();
     return 0;
 }
+    
