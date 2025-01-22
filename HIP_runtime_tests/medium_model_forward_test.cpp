@@ -1,125 +1,138 @@
+#include <hip/hip_runtime.h>
 #include <iostream>
 #include <vector>
 #include <chrono>
-#include <hip/hip_runtime.h>
 
-#define INPUT_SIZE 4
-#define HIDDEN_SIZE 3
-#define OUTPUT_SIZE 2
-#define LAYERS 3
-#define REPEATS 50
+#define CHECK_HIP_ERROR(error) \
+    if (error != hipSuccess) { \
+        std::cerr << "HIP Error: " << hipGetErrorString(error) << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+        exit(EXIT_FAILURE); \
+    }
 
-// Activation function (Sigmoid)
-__device__ float sigmoid(float x) {
-    return 1.0f / (1.0f + expf(-x));
+__global__ void conv2d(const float* input, const float* kernel, float* output, 
+                       int inputWidth, int inputHeight, 
+                       int kernelWidth, int kernelHeight, 
+                       int outputWidth, int outputHeight) {
+    int outputX = blockIdx.x * blockDim.x + threadIdx.x;
+    int outputY = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (outputX < outputWidth && outputY < outputHeight) {
+        float sum = 0.0f;
+        for (int ky = 0; ky < kernelHeight; ky++) {
+            for (int kx = 0; kx < kernelWidth; kx++) {
+                int inputX = outputX + kx;
+                int inputY = outputY + ky;
+                sum += input[inputY * inputWidth + inputX] * kernel[ky * kernelWidth + kx];
+            }
+        }
+        output[outputY * outputWidth + outputX] = sum;
+    }
 }
 
-// Feedforward operation for a single layer
-__global__ void feedforward(float* input, float* weights, float* biases, float* output, int input_size, int output_size) {
-    int idx = threadIdx.x;
-    if (idx < output_size) {
-        float sum = 0.0f;
-        for (int j = 0; j < input_size; j++) {
-            sum += input[j] * weights[idx * input_size + j];
-        }
-        output[idx] = sigmoid(sum + biases[idx]);
+void runConvolutionTest() {
+    const int inputWidth = 64, inputHeight = 64;
+    const int kernelWidth = 3, kernelHeight = 3;
+    const int outputWidth = inputWidth - kernelWidth + 1;
+    const int outputHeight = inputHeight - kernelHeight + 1;
+
+    const size_t inputSize = inputWidth * inputHeight * sizeof(float);
+    const size_t kernelSize = kernelWidth * kernelHeight * sizeof(float);
+    const size_t outputSize = outputWidth * outputHeight * sizeof(float);
+
+    std::vector<float> h_input(inputWidth * inputHeight, 1.0f);
+    std::vector<float> h_kernel(kernelWidth * kernelHeight, 1.0f);
+    std::vector<float> h_output(outputWidth * outputHeight, 0.0f);
+
+    float *d_input, *d_kernel, *d_output;
+
+    // Allocate memory
+    CHECK_HIP_ERROR(hipMalloc(&d_input, inputSize));
+    CHECK_HIP_ERROR(hipMalloc(&d_kernel, kernelSize));
+    CHECK_HIP_ERROR(hipMalloc(&d_output, outputSize));
+
+    // Copy data to device
+    CHECK_HIP_ERROR(hipMemcpy(d_input, h_input.data(), inputSize, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(hipMemcpy(d_kernel, h_kernel.data(), kernelSize, hipMemcpyHostToDevice));
+
+    dim3 blockDim(16, 16);
+    dim3 gridDim((outputWidth + blockDim.x - 1) / blockDim.x, 
+                 (outputHeight + blockDim.y - 1) / blockDim.y);
+
+    // Measure time for direct kernel execution
+    float nonGraphTotalTime = 0.0f;
+    auto nonGraphStart = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < 10000; i++) {
+        auto start = std::chrono::high_resolution_clock::now();
+        hipLaunchKernelGGL(conv2d, gridDim, blockDim, 0, 0, 
+                           d_input, d_kernel, d_output, 
+                           inputWidth, inputHeight, kernelWidth, kernelHeight, 
+                           outputWidth, outputHeight);
+        CHECK_HIP_ERROR(hipDeviceSynchronize());
+        auto end = std::chrono::high_resolution_clock::now();
+        nonGraphTotalTime += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     }
+    auto nonGraphEnd = std::chrono::high_resolution_clock::now();
+    float nonGraphAverageTime = nonGraphTotalTime / 10000.0f;
+
+    std::cout << "Non-graph average execution time: " << nonGraphAverageTime << " microseconds" << std::endl;
+
+    // Create HIP graph
+    hipGraph_t graph;
+    hipGraphExec_t graphExec;
+    hipStream_t stream;
+    CHECK_HIP_ERROR(hipStreamCreate(&stream));
+    CHECK_HIP_ERROR(hipGraphCreate(&graph, 0));
+
+    hipGraphNode_t kernelNode;
+    hipKernelNodeParams kernelParams = {0};
+    void* kernelArgs[] = {reinterpret_cast<void*>(&d_input), 
+                          reinterpret_cast<void*>(&d_kernel), 
+                          reinterpret_cast<void*>(&d_output), 
+                          const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                          const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                          const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                          const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                          const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                          const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+    kernelParams.func = (void*)conv2d;
+    kernelParams.gridDim = gridDim;
+    kernelParams.blockDim = blockDim;
+    kernelParams.sharedMemBytes = 0;
+    kernelParams.kernelParams = kernelArgs;
+    kernelParams.extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode, graph, nullptr, 0, &kernelParams));
+    CHECK_HIP_ERROR(hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+
+    // Measure time for graph execution
+    float graphTotalTime = 0.0f;
+    auto graphStart = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < 10000; i++) {
+        auto start = std::chrono::high_resolution_clock::now();
+        CHECK_HIP_ERROR(hipGraphLaunch(graphExec, stream));
+        CHECK_HIP_ERROR(hipStreamSynchronize(stream));
+        auto end = std::chrono::high_resolution_clock::now();
+        graphTotalTime += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    }
+    auto graphEnd = std::chrono::high_resolution_clock::now();
+    float graphAverageTime = graphTotalTime / 10000.0f;
+
+    std::cout << "Graph average execution time: " << graphAverageTime << " microseconds" << std::endl;
+
+    // Calculate percentage improvement
+    float improvement = ((nonGraphAverageTime - graphAverageTime) / nonGraphAverageTime) * 100.0f;
+    std::cout << "Percentage improvement: " << improvement << "%" << std::endl;
+
+    // Cleanup
+    CHECK_HIP_ERROR(hipGraphExecDestroy(graphExec));
+    CHECK_HIP_ERROR(hipGraphDestroy(graph));
+    CHECK_HIP_ERROR(hipStreamDestroy(stream));
+    CHECK_HIP_ERROR(hipFree(d_input));
+    CHECK_HIP_ERROR(hipFree(d_kernel));
+    CHECK_HIP_ERROR(hipFree(d_output));
 }
 
 int main() {
-    // Host data
-    float input[INPUT_SIZE] = {1.0f, 0.5f, 0.25f, 0.75f};
-    float hidden_weights[LAYERS][INPUT_SIZE * HIDDEN_SIZE] = {
-        {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 0.0f, 0.1f, 0.2f},
-        {0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 0.1f, 0.2f, 0.3f, 0.4f},
-        {0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f}
-    };
-    float hidden_biases[LAYERS][HIDDEN_SIZE] = {
-        {0.1f, 0.2f, 0.3f},
-        {0.2f, 0.3f, 0.4f},
-        {0.3f, 0.4f, 0.5f}
-    };
-    float final_output[OUTPUT_SIZE];
-
-    // Device data
-    float *d_input, *d_hidden_weights[LAYERS], *d_hidden_biases[LAYERS], *d_hidden_output[LAYERS];
-    float *d_final_output;
-
-    hipMalloc(&d_input, INPUT_SIZE * sizeof(float));
-    hipMalloc(&d_final_output, OUTPUT_SIZE * sizeof(float));
-
-    for (int i = 0; i < LAYERS; i++) {
-        hipMalloc(&d_hidden_weights[i], INPUT_SIZE * HIDDEN_SIZE * sizeof(float));
-        hipMalloc(&d_hidden_biases[i], HIDDEN_SIZE * sizeof(float));
-        hipMalloc(&d_hidden_output[i], HIDDEN_SIZE * sizeof(float));
-
-        hipMemcpy(d_hidden_weights[i], hidden_weights[i], INPUT_SIZE * HIDDEN_SIZE * sizeof(float), hipMemcpyHostToDevice);
-        hipMemcpy(d_hidden_biases[i], hidden_biases[i], HIDDEN_SIZE * sizeof(float), hipMemcpyHostToDevice);
-    }
-
-    hipMemcpy(d_input, input, INPUT_SIZE * sizeof(float), hipMemcpyHostToDevice);
-
-    // HIP Graph setup
-    hipGraph_t graph;
-    hipGraphExec_t graphExec;
-    hipGraphCreate(&graph, 0);
-
-    for (int i = 0; i < LAYERS; i++) {
-        void* kernelArgs[] = {
-            (void*)&d_input,
-            (void*)&d_hidden_weights[i],
-            (void*)&d_hidden_biases[i],
-            (void*)&d_hidden_output[i],
-            (void*)&INPUT_SIZE,
-            (void*)&HIDDEN_SIZE
-        };
-
-        hipKernelNodeParams kernelNodeParams = {};
-        kernelNodeParams.func = (void*)feedforward;
-        kernelNodeParams.gridDim = dim3(1);
-        kernelNodeParams.blockDim = dim3(HIDDEN_SIZE);
-        kernelNodeParams.sharedMemBytes = 0;
-        kernelNodeParams.kernelParams = kernelArgs;
-        kernelNodeParams.extra = nullptr;
-
-        hipGraphNode_t kernelNode;
-        hipGraphAddKernelNode(&kernelNode, graph, nullptr, 0, &kernelNodeParams);
-    }
-
-    hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
-
-    // Timing and execution
-    auto start = std::chrono::high_resolution_clock::now();
-
-    for (int i = 0; i < REPEATS; i++) {
-        hipGraphLaunch(graphExec, 0);
-        hipDeviceSynchronize();
-    }
-
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-
-    // Copy results back to host
-    hipMemcpy(final_output, d_final_output, OUTPUT_SIZE * sizeof(float), hipMemcpyDeviceToHost);
-
-    // Output results
-    std::cout << "Final Output: ";
-    for (int i = 0; i < OUTPUT_SIZE; i++) {
-        std::cout << final_output[i] << " ";
-    }
-    std::cout << std::endl;
-
-    std::cout << "Execution Time: " << elapsed.count() << " seconds" << std::endl;
-    std::cout << "Average Time per Graph Execution: " << (elapsed.count() / REPEATS) << " seconds" << std::endl;
-
-    // Free device memory
-    hipFree(d_input);
-    hipFree(d_final_output);
-    for (int i = 0; i < LAYERS; i++) {
-        hipFree(d_hidden_weights[i]);
-        hipFree(d_hidden_biases[i]);
-        hipFree(d_hidden_output[i]);
-    }
-
+    runConvolutionTest();
     return 0;
 }
