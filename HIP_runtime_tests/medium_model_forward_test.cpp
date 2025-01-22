@@ -58,24 +58,6 @@ void runConvolutionTest() {
     dim3 gridDim((outputWidth + blockDim.x - 1) / blockDim.x, 
                  (outputHeight + blockDim.y - 1) / blockDim.y);
 
-    // Measure time for direct kernel execution
-    float nonGraphTotalTime = 0.0f;
-    auto nonGraphStart = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < 10000; i++) {
-        auto start = std::chrono::high_resolution_clock::now();
-        hipLaunchKernelGGL(conv2d, gridDim, blockDim, 0, 0, 
-                           d_input, d_kernel, d_output, 
-                           inputWidth, inputHeight, kernelWidth, kernelHeight, 
-                           outputWidth, outputHeight);
-        CHECK_HIP_ERROR(hipDeviceSynchronize());
-        auto end = std::chrono::high_resolution_clock::now();
-        nonGraphTotalTime += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-    }
-    auto nonGraphEnd = std::chrono::high_resolution_clock::now();
-    float nonGraphAverageTime = nonGraphTotalTime / 10000.0f;
-
-    std::cout << "Non-graph average execution time: " << nonGraphAverageTime << " microseconds" << std::endl;
-
     // Create HIP graph
     hipGraph_t graph;
     hipGraphExec_t graphExec;
@@ -83,25 +65,34 @@ void runConvolutionTest() {
     CHECK_HIP_ERROR(hipStreamCreate(&stream));
     CHECK_HIP_ERROR(hipGraphCreate(&graph, 0));
 
-    hipGraphNode_t kernelNode;
-    hipKernelNodeParams kernelParams = {0};
-    void* kernelArgs[] = {reinterpret_cast<void*>(&d_input), 
-                          reinterpret_cast<void*>(&d_kernel), 
-                          reinterpret_cast<void*>(&d_output), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
-                          const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
-    kernelParams.func = (void*)conv2d;
-    kernelParams.gridDim = gridDim;
-    kernelParams.blockDim = blockDim;
-    kernelParams.sharedMemBytes = 0;
-    kernelParams.kernelParams = kernelArgs;
-    kernelParams.extra = nullptr;
+    std::vector<float*> intermediateOutputs(50);
+    for (int i = 0; i < 50; i++) {
+        CHECK_HIP_ERROR(hipMalloc(&intermediateOutputs[i], outputSize));
+    }
 
-    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode, graph, nullptr, 0, &kernelParams));
+    // Add multiple kernels to the graph
+    for (int i = 0; i < 50; i++) {
+        hipGraphNode_t kernelNode;
+        hipKernelNodeParams kernelParams = {0};
+        void* kernelArgs[] = {reinterpret_cast<void*>(&d_input), 
+                              reinterpret_cast<void*>(&d_kernel), 
+                              reinterpret_cast<void*>(&intermediateOutputs[i]), 
+                              const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                              const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                              const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                              const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                              const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                              const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+        kernelParams.func = (void*)conv2d;
+        kernelParams.gridDim = gridDim;
+        kernelParams.blockDim = blockDim;
+        kernelParams.sharedMemBytes = 0;
+        kernelParams.kernelParams = kernelArgs;
+        kernelParams.extra = nullptr;
+
+        CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode, graph, nullptr, 0, &kernelParams));
+    }
+
     CHECK_HIP_ERROR(hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
 
     // Measure time for graph execution
@@ -117,16 +108,15 @@ void runConvolutionTest() {
     auto graphEnd = std::chrono::high_resolution_clock::now();
     float graphAverageTime = graphTotalTime / 10000.0f;
 
-    std::cout << "Graph average execution time: " << graphAverageTime << " microseconds" << std::endl;
-
-    // Calculate percentage improvement
-    float improvement = ((nonGraphAverageTime - graphAverageTime) / nonGraphAverageTime) * 100.0f;
-    std::cout << "Percentage improvement: " << improvement << "%" << std::endl;
+    std::cout << "Graph with 50 kernels average execution time: " << graphAverageTime << " microseconds" << std::endl;
 
     // Cleanup
     CHECK_HIP_ERROR(hipGraphExecDestroy(graphExec));
     CHECK_HIP_ERROR(hipGraphDestroy(graph));
     CHECK_HIP_ERROR(hipStreamDestroy(stream));
+    for (float* ptr : intermediateOutputs) {
+        CHECK_HIP_ERROR(hipFree(ptr));
+    }
     CHECK_HIP_ERROR(hipFree(d_input));
     CHECK_HIP_ERROR(hipFree(d_kernel));
     CHECK_HIP_ERROR(hipFree(d_output));
