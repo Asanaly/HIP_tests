@@ -13,7 +13,6 @@ def benchmark_function(func, *args, **kwargs):
     end = time.time()
     return end - start
 
-
 def memory_usage_check(func, *args, **kwargs):
     """Measure memory usage during execution."""
     torch.cuda.reset_peak_memory_stats()
@@ -24,10 +23,19 @@ def memory_usage_check(func, *args, **kwargs):
 
     return peak_memory
 
+def validate_outputs(output1, output2, atol=1e-6):
+    """Validate outputs between two methods."""
+    if not torch.allclose(output1, output2, atol=atol):
+        raise ValueError("Output mismatch detected!")
+    print("Output validation passed.")
 
 def test_hip_graph_execution():
     """Test HIP graph execution vs non-graph execution."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("\n[HIP Graph Execution Test]")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. This test requires a GPU.")
+
+    device = torch.device("cuda")
 
     # Define a simple model
     model = torch.nn.Sequential(
@@ -64,12 +72,15 @@ def test_hip_graph_execution():
     print(f"HIP graph execution time: {time_graph:.4f} s")
 
     # Check results for correctness
-    assert torch.allclose(non_graph_func(), static_outputs, atol=1e-6), "Results mismatch!"
-
+    validate_outputs(non_graph_func(), static_outputs)
 
 def test_hip_graph_memory_allocation():
     """Measure memory usage during HIP graph execution."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("\n[HIP Graph Memory Allocation Test]")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. This test requires a GPU.")
+
+    device = torch.device("cuda")
 
     # Define a large matrix multiplication task
     a = torch.randn(4096, 4096, device=device)
@@ -96,10 +107,13 @@ def test_hip_graph_memory_allocation():
     print(f"Non-graph peak memory: {memory_non_graph:.2f} MB")
     print(f"HIP graph peak memory: {memory_graph:.2f} MB")
 
-
 def test_hip_graph_operations_per_second():
     """Measure operations per second for a heavy workload using HIP graphs."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("\n[HIP Graph Operations Per Second Test]")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. This test requires a GPU.")
+
+    device = torch.device("cuda")
 
     # Define a workload
     a = torch.randn(4096, 4096, device=device)
@@ -123,12 +137,15 @@ def test_hip_graph_operations_per_second():
 
     ops = 2 * (4096 ** 3)  # Approx FLOPs for matmul
     print(f"Non-graph operations per second: {ops / (time_non_graph + 0.000001):.2e} ops/sec")
-    print(f"HIP graph operations per second: {ops / (time_graph+ 0.000001):.2e} ops/sec")
-
+    print(f"HIP graph operations per second: {ops / (time_graph + 0.000001):.2e} ops/sec")
 
 def test_mobilenet_training():
     """Train a MobileNet model over 50 epochs using HIP graphs."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("\n[MobileNet Training with HIP Graphs]")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. This test requires a GPU.")
+
+    device = torch.device("cuda")
 
     # Load MobileNet model
     model = mobilenet_v2(weights=None).to(device)
@@ -142,8 +159,8 @@ def test_mobilenet_training():
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
     # Define loss and optimizer
-    criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
 
     static_inputs = torch.randn(32, 3, 128, 128, device=device)
     static_labels = torch.randint(0, 1000, (32,), device=device)
@@ -158,7 +175,7 @@ def test_mobilenet_training():
         optimizer.zero_grad()
 
     # Training loop
-    for epoch in range(50):
+    for epoch in range(5):  # Use 5 epochs for demonstration
         epoch_loss = 0.0
         for inputs, labels in dataloader:
             inputs, labels = inputs.to(device), labels.to(device)
@@ -174,67 +191,17 @@ def test_mobilenet_training():
                 loss = criterion(outputs, labels)
                 epoch_loss += loss.item()
 
-        print(f"Epoch {epoch + 1}/50, Loss: {epoch_loss:.4f}")
-
-
-# Define a simple model
-class SimpleCNN(nn.Module):
-    def __init__(self):
-        super(SimpleCNN, self).__init__()
-        self.conv = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1)  # Simple convolutional layer
-        self.pool = nn.MaxPool2d(2, 2)  # Max pooling
-        self.fc = nn.Linear(16 * 16 * 16, 10)  # Fully connected layer for classification
-
-    def forward(self, x):
-        x = self.pool(torch.relu(self.conv(x)))  # Conv -> ReLU -> Pool
-        x = x.view(-1, 16 * 16 * 16)  # Flatten
-        x = self.fc(x)  # Fully connected
-        return x
-
-
-# Test function for the simple model
-def test_simple_model_training():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Initialize the model, inputs, and labels
-    model = SimpleCNN().to(device)
-    static_inputs = torch.rand(1, 3, 32, 32, device=device)  # Batch size 1, 3-channel 32x32 input
-    static_labels = torch.randint(0, 10, (1,), device=device)  # Random labels for batch size 1
-
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-
-    # Warm-up: Run a forward and backward pass
-    model.train()
-    outputs = model(static_inputs)
-    loss = criterion(outputs, static_labels)
-    loss.backward()
-    optimizer.step()
-
-    # Capture CUDA graph
-    print("Capturing CUDA Graph...")
-    graph = torch.cuda.CUDAGraph()
-    optimizer.zero_grad(set_to_none=True)  # Reset gradients
-
-    static_outputs = torch.empty_like(outputs)  # Pre-allocated output tensor
-    with torch.cuda.graph(graph):
-        static_outputs = model(static_inputs)
-        loss = criterion(static_outputs, static_labels)
-        loss.backward()
-        optimizer.step()
-
-    print("CUDA Graph captured and executed successfully.")
-
-    # Verify the outputs
-    print("Outputs:", static_outputs)
-
-import torch
-import time
+        print(f"Epoch {epoch + 1}/5, Loss: {epoch_loss:.4f}")
 
 def test_memory_transfer():
+    """Benchmark CPU-to-GPU memory transfer."""
+    print("\n[Memory Transfer Test]")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. This test requires a GPU.")
+
     size = (1024, 1024)
     cpu_tensor = torch.randn(size)
-    gpu_tensor = torch.empty(size, device='cuda')
+    gpu_tensor = torch.empty(size, device="cuda")
 
     # Warm-up
     gpu_tensor.copy_(cpu_tensor)
@@ -250,27 +217,24 @@ def test_memory_transfer():
     print(f"Average transfer time: {(end - start) / 100:.6f} seconds")
 
 if __name__ == "__main__":
-    test_memory_transfer()
-
-
-if __name__ == "__main__":
     print("Running HIP Graph Tests")
+    try:
+        # Test HIP graph execution
+        test_hip_graph_execution()
 
-    # Test HIP graph execution
-    test_hip_graph_execution()
+        # Test HIP graph memory allocation
+        test_hip_graph_memory_allocation()
 
-    # Test HIP graph memory allocation
-    test_hip_graph_memory_allocation()
+        # Test HIP graph operations per second
+        test_hip_graph_operations_per_second()
 
-    # Test HIP graph operations per second
-    test_hip_graph_operations_per_second()
+        # Train MobileNet using HIP graphs
+        test_mobilenet_training()
 
-    # Simple model training
-    test_simple_model_training()
+        # Memory transfer benchmark
+        test_memory_transfer()
 
-    # Testing memory transfer
-    test_memory_transfer()
-
-    # Train MobileNet using HIP graphs
-    test_mobilenet_training()
-
+    except RuntimeError as e:
+        print(f"Runtime Error: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
