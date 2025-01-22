@@ -20,7 +20,7 @@ class Layer {
 public:
     virtual void forward(hipStream_t stream) = 0;
     virtual void setupGraphNode(hipGraph_t& graph, hipGraphNode_t& lastNode) = 0;
-    virtual ~Layer() = default;
+    virtual ~Layer() {};
     virtual void setInput(float* input);
 };
 
@@ -50,7 +50,7 @@ public:
         CHECK_HIP_ERROR(hipMemcpy(d_weights, h_weights.data(), inSize * outSize * sizeof(float), hipMemcpyHostToDevice));
     }
 
-    void setInput(float* input) { d_input = input; }
+    void setInput(float* input) override  { d_input = input; }
     float* getOutput() { return d_output; }
 
     void forward(hipStream_t stream) override {
