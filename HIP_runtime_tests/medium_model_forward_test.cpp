@@ -30,11 +30,11 @@ __global__ void conv2d(const float* input, const float* kernel, float* output,
 }
 
 void runConvolutionComparison() {
-    const int inputWidth = 64, inputHeight = 64;
-    const int kernelWidth = 3, kernelHeight = 3;
+    const int inputWidth = 64 * 2, inputHeight = 64 * 2;
+    const int kernelWidth = 3 * 2, kernelHeight = 3 * 2;
     const int outputWidth = inputWidth - kernelWidth + 1;
     const int outputHeight = inputHeight - kernelHeight + 1;
-    const int numKernels = 50;
+    const int numKernels = 100;
 
     const size_t inputSize = inputWidth * inputHeight * sizeof(float);
     const size_t kernelSize = kernelWidth * kernelHeight * sizeof(float);
@@ -80,7 +80,7 @@ void runConvolutionComparison() {
     auto nonGraphEnd = std::chrono::high_resolution_clock::now();
     float nonGraphAverageTime = nonGraphTotalTime / 10000.0f;
 
-    std::cout << "Non-graph total execution time: " << nonGraphTotalTime / 1000.0f << " ms" << std::endl;
+    std::cout << "Non-graph total execution time: " << nonGraphTotalTime / 10000.0f << " ms" << std::endl;
     std::cout << "Non-graph average execution time: " << nonGraphAverageTime << " microseconds" << std::endl;
 
     // Graph execution
@@ -126,7 +126,7 @@ void runConvolutionComparison() {
     auto graphEnd = std::chrono::high_resolution_clock::now();
     float graphAverageTime = graphTotalTime / 10000.0f;
 
-    std::cout << "Graph total execution time: " << graphTotalTime / 1000.0f << " ms" << std::endl;
+    std::cout << "Graph total execution time: " << graphTotalTime / 10000.0f << " ms" << std::endl;
     std::cout << "Graph average execution time: " << graphAverageTime << " microseconds" << std::endl;
 
     // Percentage improvement
