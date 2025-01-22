@@ -8,6 +8,7 @@
 #define CONV2_SIZE 128
 #define FC1_SIZE 512
 #define FC2_SIZE 256
+#define RUNS 20
 #define OUTPUT_SIZE 10  // Example output size for classification
 
 __device__ float sigmoid(float x) {
