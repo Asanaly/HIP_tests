@@ -178,7 +178,7 @@ void runConvolutionTest() {
     float total_time = 0.0f;
     auto total_start = std::chrono::high_resolution_clock::now();
 
-    for (int i = 0; i < 40; i++) {
+    for (int i = 0; i < 100; i++) {
         auto start = std::chrono::high_resolution_clock::now();
         CHECK_HIP_ERROR(hipGraphLaunch(graphExec, stream));
         CHECK_HIP_ERROR(hipStreamSynchronize(stream));
@@ -187,11 +187,11 @@ void runConvolutionTest() {
     }
 
     auto total_end = std::chrono::high_resolution_clock::now();
-    float average_time = total_time / 40.0f;
+    float average_time = total_time / 100.0f;
     float overall_total_time = std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count();
 
     std::cout << "Average execution time: " << average_time << " microseconds" << std::endl;
-    std::cout << "Total execution time for 40 runs: " << overall_total_time << " microseconds" << std::endl;
+    std::cout << "Total execution time for 100 runs: " << overall_total_time << " microseconds" << std::endl;
 
     // Copy results back to host
     CHECK_HIP_ERROR(hipMemcpy(h_output.data(), d_output, outputSize, hipMemcpyDeviceToHost));
