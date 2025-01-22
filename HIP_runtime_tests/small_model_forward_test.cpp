@@ -1,92 +1,208 @@
+#include <hip/hip_runtime.h>
 #include <iostream>
 #include <vector>
-#include <hip/hip_runtime.h>
+#include <chrono>
 
-#define INPUT_SIZE 4
-#define HIDDEN_SIZE 3
-#define OUTPUT_SIZE 2
+#define CHECK_HIP_ERROR(error) \
+    if (error != hipSuccess) { \
+        std::cerr << "HIP Error: " << hipGetErrorString(error) << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+        exit(EXIT_FAILURE); \
+    }
 
-// Activation function (Sigmoid)
-__device__ float sigmoid(float x) {
-    return 1.0f / (1.0f + expf(-x));
-}
+__global__ void conv2d(const float* input, const float* kernel, float* output, 
+                       int inputWidth, int inputHeight, 
+                       int kernelWidth, int kernelHeight, 
+                       int outputWidth, int outputHeight) {
+    int outputX = blockIdx.x * blockDim.x + threadIdx.x;
+    int outputY = blockIdx.y * blockDim.y + threadIdx.y;
 
-// Feedforward operation for a single layer
-__global__ void feedforward(float* input, float* weights, float* biases, float* output, int input_size, int output_size) {
-    int idx = threadIdx.x;
-    if (idx < output_size) {
+    if (outputX < outputWidth && outputY < outputHeight) {
         float sum = 0.0f;
-        for (int j = 0; j < input_size; j++) {
-            sum += input[j] * weights[idx * input_size + j];
+        for (int ky = 0; ky < kernelHeight; ky++) {
+            for (int kx = 0; kx < kernelWidth; kx++) {
+                int inputX = outputX + kx;
+                int inputY = outputY + ky;
+                sum += input[inputY * inputWidth + inputX] * kernel[ky * kernelWidth + kx];
+            }
         }
-        output[idx] = sigmoid(sum + biases[idx]);
+        output[outputY * outputWidth + outputX] = sum;
     }
 }
 
-int main() {
-    // Host data
-    float input[INPUT_SIZE] = {1.0f, 0.5f, 0.25f, 0.75f};
-    float hidden_weights[INPUT_SIZE * HIDDEN_SIZE] = {
-        0.1f, 0.2f, 0.3f,
-        0.4f, 0.5f, 0.6f,
-        0.7f, 0.8f, 0.9f,
-        0.0f, 0.1f, 0.2f
-    };
-    float hidden_biases[HIDDEN_SIZE] = {0.1f, 0.2f, 0.3f};
-    float output_weights[HIDDEN_SIZE * OUTPUT_SIZE] = {
-        0.1f, 0.2f,
-        0.3f, 0.4f,
-        0.5f, 0.6f
-    };
-    float output_biases[OUTPUT_SIZE] = {0.1f, 0.2f};
-    float hidden_output[HIDDEN_SIZE];
-    float final_output[OUTPUT_SIZE];
+void runConvolutionTest() {
+    const int inputWidth = 64, inputHeight = 64;
+    const int kernelWidth = 3, kernelHeight = 3;
+    const int outputWidth = inputWidth - kernelWidth + 1;
+    const int outputHeight = inputHeight - kernelHeight + 1;
 
-    // Device data
-    float *d_input, *d_hidden_weights, *d_hidden_biases, *d_hidden_output;
-    float *d_output_weights, *d_output_biases, *d_final_output;
+    const size_t inputSize = inputWidth * inputHeight * sizeof(float);
+    const size_t kernelSize = kernelWidth * kernelHeight * sizeof(float);
+    const size_t outputSize = outputWidth * outputHeight * sizeof(float);
 
-    hipMalloc(&d_input, INPUT_SIZE * sizeof(float));
-    hipMalloc(&d_hidden_weights, INPUT_SIZE * HIDDEN_SIZE * sizeof(float));
-    hipMalloc(&d_hidden_biases, HIDDEN_SIZE * sizeof(float));
-    hipMalloc(&d_hidden_output, HIDDEN_SIZE * sizeof(float));
-    hipMalloc(&d_output_weights, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float));
-    hipMalloc(&d_output_biases, OUTPUT_SIZE * sizeof(float));
-    hipMalloc(&d_final_output, OUTPUT_SIZE * sizeof(float));
+    std::vector<float> h_input(inputWidth * inputHeight, 1.0f);
+    std::vector<float> h_kernel(kernelWidth * kernelHeight, 1.0f);
+    std::vector<float> h_output(outputWidth * outputHeight, 0.0f);
 
-    hipMemcpy(d_input, input, INPUT_SIZE * sizeof(float), hipMemcpyHostToDevice);
-    hipMemcpy(d_hidden_weights, hidden_weights, INPUT_SIZE * HIDDEN_SIZE * sizeof(float), hipMemcpyHostToDevice);
-    hipMemcpy(d_hidden_biases, hidden_biases, HIDDEN_SIZE * sizeof(float), hipMemcpyHostToDevice);
-    hipMemcpy(d_output_weights, output_weights, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float), hipMemcpyHostToDevice);
-    hipMemcpy(d_output_biases, output_biases, OUTPUT_SIZE * sizeof(float), hipMemcpyHostToDevice);
+    float *d_input, *d_kernel, *d_output;
+    float *d_intermediate1, *d_intermediate2, *d_intermediate3, *d_intermediate4;
 
-    // Feedforward for hidden layer
-    hipLaunchKernelGGL(feedforward, dim3(1), dim3(HIDDEN_SIZE), 0, 0, d_input, d_hidden_weights, d_hidden_biases, d_hidden_output, INPUT_SIZE, HIDDEN_SIZE);
-    hipDeviceSynchronize();
+    // Allocate memory
+    CHECK_HIP_ERROR(hipMalloc(&d_input, inputSize));
+    CHECK_HIP_ERROR(hipMalloc(&d_kernel, kernelSize));
+    CHECK_HIP_ERROR(hipMalloc(&d_intermediate1, outputSize));
+    CHECK_HIP_ERROR(hipMalloc(&d_intermediate2, outputSize));
+    CHECK_HIP_ERROR(hipMalloc(&d_intermediate3, outputSize));
+    CHECK_HIP_ERROR(hipMalloc(&d_intermediate4, outputSize));
+    CHECK_HIP_ERROR(hipMalloc(&d_output, outputSize));
 
-    // Feedforward for output layer
-    hipLaunchKernelGGL(feedforward, dim3(1), dim3(OUTPUT_SIZE), 0, 0, d_hidden_output, d_output_weights, d_output_biases, d_final_output, HIDDEN_SIZE, OUTPUT_SIZE);
-    hipDeviceSynchronize();
+    // Copy data to device
+    CHECK_HIP_ERROR(hipMemcpy(d_input, h_input.data(), inputSize, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(hipMemcpy(d_kernel, h_kernel.data(), kernelSize, hipMemcpyHostToDevice));
+
+    // Create HIP graph
+    hipGraph_t graph;
+    hipGraphNode_t kernelNode[5];
+    hipKernelNodeParams kernelParams[5] = {0};
+    hipStream_t stream;
+
+    CHECK_HIP_ERROR(hipStreamCreate(&stream));
+    CHECK_HIP_ERROR(hipGraphCreate(&graph, 0));
+
+    dim3 blockDim(16, 16);
+    dim3 gridDim((outputWidth + blockDim.x - 1) / blockDim.x, 
+                 (outputHeight + blockDim.y - 1) / blockDim.y);
+
+    void* kernelArgs1[] = {reinterpret_cast<void*>(&d_input), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_intermediate1), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+
+    kernelParams[0].func = (void*)conv2d;
+    kernelParams[0].gridDim = gridDim;
+    kernelParams[0].blockDim = blockDim;
+    kernelParams[0].sharedMemBytes = 0;
+    kernelParams[0].kernelParams = kernelArgs1;
+    kernelParams[0].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[0], graph, nullptr, 0, &kernelParams[0]));
+
+    void* kernelArgs2[] = {reinterpret_cast<void*>(&d_intermediate1), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_intermediate2), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+
+    kernelParams[1].func = (void*)conv2d;
+    kernelParams[1].gridDim = gridDim;
+    kernelParams[1].blockDim = blockDim;
+    kernelParams[1].sharedMemBytes = 0;
+    kernelParams[1].kernelParams = kernelArgs2;
+    kernelParams[1].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[1], graph, nullptr, 0, &kernelParams[1]));
+
+    void* kernelArgs3[] = {reinterpret_cast<void*>(&d_intermediate2), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_intermediate3), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+
+    kernelParams[2].func = (void*)conv2d;
+    kernelParams[2].gridDim = gridDim;
+    kernelParams[2].blockDim = blockDim;
+    kernelParams[2].sharedMemBytes = 0;
+    kernelParams[2].kernelParams = kernelArgs3;
+    kernelParams[2].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[2], graph, nullptr, 0, &kernelParams[2]));
+
+    void* kernelArgs4[] = {reinterpret_cast<void*>(&d_intermediate3), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_intermediate4), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+
+    kernelParams[3].func = (void*)conv2d;
+    kernelParams[3].gridDim = gridDim;
+    kernelParams[3].blockDim = blockDim;
+    kernelParams[3].sharedMemBytes = 0;
+    kernelParams[3].kernelParams = kernelArgs4;
+    kernelParams[3].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[3], graph, nullptr, 0, &kernelParams[3]));
+
+    void* kernelArgs5[] = {reinterpret_cast<void*>(&d_intermediate4), 
+                      reinterpret_cast<void*>(&d_kernel), 
+                      reinterpret_cast<void*>(&d_output), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&inputHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&kernelHeight)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputWidth)), 
+                      const_cast<void*>(reinterpret_cast<const void*>(&outputHeight))};
+
+    kernelParams[4].func = (void*)conv2d;
+    kernelParams[4].gridDim = gridDim;
+    kernelParams[4].blockDim = blockDim;
+    kernelParams[4].sharedMemBytes = 0;
+    kernelParams[4].kernelParams = kernelArgs5;
+    kernelParams[4].extra = nullptr;
+
+    CHECK_HIP_ERROR(hipGraphAddKernelNode(&kernelNode[4], graph, nullptr, 0, &kernelParams[4]));
+
+    hipGraphExec_t graphExec;
+    auto graph_start = std::chrono::high_resolution_clock::now();
+    CHECK_HIP_ERROR(hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+    auto graph_end = std::chrono::high_resolution_clock::now();
+    std::cout << "Time to build graph: " 
+          << std::chrono::duration_cast<std::chrono::microseconds>(graph_end - graph_start).count() 
+          << " microseconds" << std::endl;
+
+    float total_time = 0.0f;
+
+    for (int i = 0; i < 40; i++) {
+        auto start = std::chrono::high_resolution_clock::now();
+        CHECK_HIP_ERROR(hipGraphLaunch(graphExec, stream));
+        CHECK_HIP_ERROR(hipStreamSynchronize(stream));
+        auto end = std::chrono::high_resolution_clock::now();
+        total_time += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    }
+
+    float average_time = total_time / 40.0f;
+    std::cout << "Average execution time: " << average_time << " microseconds" << std::endl;
 
     // Copy results back to host
-    hipMemcpy(hidden_output, d_hidden_output, HIDDEN_SIZE * sizeof(float), hipMemcpyDeviceToHost);
-    hipMemcpy(final_output, d_final_output, OUTPUT_SIZE * sizeof(float), hipMemcpyDeviceToHost);
+    CHECK_HIP_ERROR(hipMemcpy(h_output.data(), d_output, outputSize, hipMemcpyDeviceToHost));
 
-    // Output final results
-    std::cout << "Output: ";
-    for (int i = 0; i < OUTPUT_SIZE; i++) {
-        std::cout << final_output[i] << " ";
-    }
-    std::cout << std::endl;
+    // Free resources
+    CHECK_HIP_ERROR(hipGraphExecDestroy(graphExec));
+    CHECK_HIP_ERROR(hipGraphDestroy(graph));
+    CHECK_HIP_ERROR(hipStreamDestroy(stream));
+    CHECK_HIP_ERROR(hipFree(d_input));
+    CHECK_HIP_ERROR(hipFree(d_kernel));
+    CHECK_HIP_ERROR(hipFree(d_intermediate1));
+    CHECK_HIP_ERROR(hipFree(d_intermediate2));
+    CHECK_HIP_ERROR(hipFree(d_intermediate3));
+    CHECK_HIP_ERROR(hipFree(d_intermediate4));
+    CHECK_HIP_ERROR(hipFree(d_output));
 
-    // Free device memory
-    hipFree(d_input);
-    hipFree(d_hidden_weights);
-    hipFree(d_hidden_biases);
-    hipFree(d_hidden_output);
-    hipFree(d_output_weights);
-    hipFree(d_output_biases);
-    hipFree(d_final_output);
-
+    std::cout << "Test completed successfully." << std::endl;
     return 0;
 }
