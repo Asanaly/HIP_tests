@@ -204,5 +204,8 @@ void runConvolutionTest() {
     CHECK_HIP_ERROR(hipFree(d_output));
 
     std::cout << "Test completed successfully." << std::endl;
-    return 0;
 }
+
+if __name__ == "__main__":
+    runConvolutionTest();
+
