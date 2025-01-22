@@ -206,6 +206,8 @@ void runConvolutionTest() {
     std::cout << "Test completed successfully." << std::endl;
 }
 
-if __name__ == "__main__":
+int main(){
     runConvolutionTest();
-
+    return 0;
+}
+    
