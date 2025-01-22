@@ -124,7 +124,7 @@ public:
 
         // Execute the graph
         CHECK_HIP_ERROR(hipGraphLaunch(graphExec, stream));
-        CHECK_HIP_ERROR(hipStreamSynchronize(stream));
+        CHECK_HIP_ERROR(hipStreamSynchronize(stream)); 
     }
 
     ~NeuralNetwork() {
