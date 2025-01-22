@@ -21,6 +21,7 @@ public:
     virtual void forward(hipStream_t stream) = 0;
     virtual void setupGraphNode(hipGraph_t& graph, hipGraphNode_t& lastNode) = 0;
     virtual ~Layer() = default;
+    virtual void setInput(float* input);
 };
 
 class DenseLayer : public Layer {
